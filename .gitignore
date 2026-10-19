@@ -4,3 +4,7 @@ __pycache__/
 faiss_db/
 *.db-shm
 *.db-wal
+.venv/
+
+.claude/
+my_paper.pdf

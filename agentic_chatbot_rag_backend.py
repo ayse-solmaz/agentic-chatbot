@@ -267,9 +267,22 @@ class ChatState(TypedDict):
 def chat_node(state: ChatState):
     """LLM node that can answer directly or call an appropriate tool."""
 
+    # tell the model whether a PDF is indexed, otherwise it may ask
+    # the user to upload one instead of calling rag_tool
+    if os.path.exists("faiss_db"):
+        document_status = (
+            "Document status: a PDF has already been uploaded and indexed. "
+            "Whenever the user asks about a paper, article, document, its authors, "
+            "methods, data or results (in any language), call `rag_tool` first. "
+            "Never ask the user to upload a PDF.\n\n"
+        )
+    else:
+        document_status = "Document status: no PDF has been uploaded yet.\n\n"
+
     system_message = SystemMessage(
         content=(
             "You are a helpful Agentic Chatbot with access to several tools.\n\n"
+            + document_status +
 
             "Tool usage instructions:\n"
             "- Use `rag_tool` for questions about the uploaded PDF or document. "
