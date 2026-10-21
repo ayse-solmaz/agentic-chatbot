@@ -8,3 +8,7 @@ faiss_db/
 
 .claude/
 my_paper.pdf
+
+*.pyc
+.pytest_cache/
+.DS_Store
