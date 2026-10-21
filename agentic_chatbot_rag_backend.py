@@ -10,6 +10,8 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_tavily import TavilySearch
 from langchain_core.tools import tool
 import math
+import ast
+import operator
 import requests
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -97,6 +99,87 @@ search_tool = TavilySearch(
     search_depth="advanced"
 )
 
+# operators the calculator is allowed to use
+ALLOWED_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+# functions the calculator is allowed to call
+ALLOWED_FUNCTIONS = {
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "sum": sum,
+}
+
+
+def safe_eval(node):
+    """Evaluate a math expression tree, allowing only numbers, operators and math functions."""
+
+    if isinstance(node, ast.Expression):
+        return safe_eval(node.body)
+
+    # numbers: 2, 3.5
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value
+
+    # lists for sum([1, 2, 3]) or max([1, 2])
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [safe_eval(item) for item in node.elts]
+
+    # 2 + 3, 10 * 5, 2 ** 8
+    if isinstance(node, ast.BinOp) and type(node.op) in ALLOWED_OPERATORS:
+        left = safe_eval(node.left)
+        right = safe_eval(node.right)
+
+        # stop huge powers like 9 ** 9 ** 9 that would freeze the app
+        if isinstance(node.op, ast.Pow) and abs(right) > 1000:
+            raise ValueError("exponent is too large")
+
+        return ALLOWED_OPERATORS[type(node.op)](left, right)
+
+    # -5, +3
+    if isinstance(node, ast.UnaryOp) and type(node.op) in ALLOWED_OPERATORS:
+        return ALLOWED_OPERATORS[type(node.op)](safe_eval(node.operand))
+
+    # math.pi, math.e
+    if (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "math"
+        and isinstance(getattr(math, node.attr, None), float)
+    ):
+        return getattr(math, node.attr)
+
+    # abs(-3), round(2.5), math.sqrt(16)
+    if isinstance(node, ast.Call) and not node.keywords:
+        if isinstance(node.func, ast.Name) and node.func.id in ALLOWED_FUNCTIONS:
+            function = ALLOWED_FUNCTIONS[node.func.id]
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "math"
+            and not node.func.attr.startswith("_")
+            and callable(getattr(math, node.func.attr, None))
+        ):
+            function = getattr(math, node.func.attr)
+        else:
+            raise ValueError("this function is not allowed")
+
+        return function(*[safe_eval(argument) for argument in node.args])
+
+    raise ValueError("only numbers, + - * / ** % // and math functions are allowed")
+
+
 @tool
 def calculator(expression: str) -> str:
     """
@@ -104,18 +187,9 @@ def calculator(expression: str) -> str:
     Input should be a valid math expression.
     Example: 2 + 2, math.sqrt(16), 10 * 5
     """
-
     try:
-        allowed = {
-            "math": math,
-            "abs": abs,
-            "round": round,
-            "min": min,
-            "max": max,
-            "sum": sum
-        }
-
-        result = eval(expression, {"__builtins__": {}}, allowed)
+        tree = ast.parse(expression, mode="eval")
+        result = safe_eval(tree)
         return str(result)
 
     except Exception as e:
